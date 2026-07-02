@@ -46,6 +46,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  OUT_DIR: /home/runner/work/YFMARCO_Recoverys_Builder/YFMARCO_Recoverys_Builder/OrangeFox/fox_12.1/out/target/product/spinel
 
 jobs:
   build:
@@ -101,7 +102,6 @@ jobs:
             cd sync/legacy
             ./orangefox_sync_legacy.sh --branch ${{ inputs.MANIFEST_BRANCH }} --path ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
         fi
-
     - name: Ensure Guava dependency exists
       if: inputs.MANIFEST_BRANCH == '14.1'
       run: |
@@ -113,14 +113,12 @@ jobs:
           rm -rf external/guava
           git clone --depth=1 https://android.googlesource.com/platform/external/guava external/guava
         fi
-
     - name: Clone Device Tree
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
         git clone https://$(echo "${{ secrets.RECOVERY_USERNAME }}" | sed 's/@/%40/'):${{ secrets.RECOVERY_TOKEN }}@$(echo "${{ inputs.DEVICE_TREE }}" | sed 's~https://~~') -b ${{ inputs.DEVICE_TREE_BRANCH }} ./device_tree
         cd device_tree
         echo "COMMIT_ID=$(git rev-parse HEAD)" >> $GITHUB_ENV
-
     - name: Extracting variables from .mk file
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/device_tree
@@ -152,12 +150,10 @@ jobs:
         # Move device_tree folder to device_directory and rename it to $DEVICE_NAME
         echo "Moving device_tree to $DEVICE_DIRECTORY/$DEVICE_NAME"
         mv device_tree "$DEVICE_DIRECTORY"/"$DEVICE_NAME"
-
     - name: Installing python2 for legacy builds
       if: env.CHECK_LEGACY_BRANCH == 'true'
       run: |
         sudo apt-get install python2 python-is-python2
-
     - name: Building OrangeFox
       run: |
         cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
@@ -172,36 +168,67 @@ jobs:
         else
             lunch omni_${{ env.DEVICE_NAME }}-eng && make clean && mka ${{ inputs.BUILD_TARGET }}image
         fi
-
     - name: Set Build Date # For Build Date Info, currently using Asia/Manila
       run: |
         echo "BUILD_DATE=$(TZ=Asia/Manila date +%Y%m%d)" >> $GITHUB_ENV
 
     - name: Check if Recovery Exist
       run: |
-        cd ${GITHUB_WORKSPACE}/OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}
-        if [ -f out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.img ]; then
-            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
-            echo "MD5_IMG=$(md5sum out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.img | cut -d ' ' -f 1)" >> $GITHUB_ENV
+        # Case-insensitive globbing, and don't error out if a pattern matches nothing
+        shopt -s nocaseglob nullglob
+
+        OUT_DIR="${{ env.OUT_DIR }}"
+        echo "Scanning: $OUT_DIR"
+
+        # Collect every .img (any case) in the output dir
+        IMG_FILES=("$OUT_DIR"/*.img)
+
+        # Explicitly make sure vendor_boot.img is included even if the glob above misses it
+        VENDOR_BOOT="$OUT_DIR/vendor_boot.img"
+        if [ -f "$VENDOR_BOOT" ]; then
+            FOUND=false
+            for f in "${IMG_FILES[@]}"; do
+                if [ "$f" == "$VENDOR_BOOT" ]; then
+                    FOUND=true
+                    break
+                fi
+            done
+            if [ "$FOUND" == "false" ]; then
+                IMG_FILES+=("$VENDOR_BOOT")
+            fi
+            echo "CHECK_VENDOR_BOOT_IS_OK=true" >> $GITHUB_ENV
         else
-            echo "Recovery out directory is empty."
+            echo "vendor_boot.img not found at $VENDOR_BOOT"
         fi
-        if [ -f out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.zip ]; then
-            echo "CHECK_ZIP_IS_OK=true" >> $GITHUB_ENV
-            echo "MD5_ZIP=$(md5sum out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.zip | cut -d ' ' -f 1)" >> $GITHUB_ENV
+
+        # Collect every OrangeFox*.zip (any case)
+        ZIP_FILES=("$OUT_DIR"/OrangeFox*.zip)
+
+        if [ "${#IMG_FILES[@]}" -gt 0 ]; then
+            echo "CHECK_IMG_IS_OK=true" >> $GITHUB_ENV
+            echo "Found .img files:"
+            printf '  %s\n' "${IMG_FILES[@]}"
         else
-            echo "Recovery out directory is empty."
+            echo "No .img files found in $OUT_DIR"
+        fi
+
+        if [ "${#ZIP_FILES[@]}" -gt 0 ]; then
+            echo "CHECK_ZIP_IS_OK=true" >> $GITHUB_ENV
+            echo "MD5_ZIP=$(md5sum "${ZIP_FILES[0]}" | cut -d ' ' -f 1)" >> $GITHUB_ENV
+            echo "Found zip file(s):"
+            printf '  %s\n' "${ZIP_FILES[@]}"
+        else
+            echo "No OrangeFox*.zip files found in $OUT_DIR"
         fi
 
     - name: Upload to Release
-      if: env.CHECK_IMG_IS_OK == 'true' && env.CHECK_ZIP_IS_OK == 'true'
+      if: env.CHECK_IMG_IS_OK == 'true' || env.CHECK_ZIP_IS_OK == 'true'
       uses: softprops/action-gh-release@v2.3.0
       with:
         files: |
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.img
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.img.tar
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/OrangeFox*.zip
-          OrangeFox/fox_${{ inputs.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/ramdisk-recovery.*
+          /home/runner/work/YFMARCO_Recoverys_Builder/YFMARCO_Recoverys_Builder/OrangeFox/fox_12.1/out/target/product/spinel/*.[Ii][Mm][Gg]
+          /home/runner/work/YFMARCO_Recoverys_Builder/YFMARCO_Recoverys_Builder/OrangeFox/fox_12.1/out/target/product/spinel/[Oo]range[Ff]ox*.[Zz][Ii][Pp]
+          /home/runner/work/YFMARCO_Recoverys_Builder/YFMARCO_Recoverys_Builder/OrangeFox/fox_12.1/out/target/product/spinel/vendor_boot.img
         name: Unofficial OrangeFox for ${{ env.DEVICE_NAME }} // ${{ env.BUILD_DATE }}
         tag_name: ${{ github.run_id }}
         token: ${{ secrets.RECOVERY_TOKEN }}
@@ -209,7 +236,6 @@ jobs:
           Build: ${{ inputs.MANIFEST_BRANCH }}
           Device: [Device Tree/Branch](${{ inputs.DEVICE_TREE }}/tree/${{ inputs.DEVICE_TREE_BRANCH }})
           Commit: Most recent [commit](${{ inputs.DEVICE_TREE }}/commit/${{ env.COMMIT_ID }}) during building.
-          MD5 (img): ${{ env.MD5_IMG }}
           MD5 (zip): ${{ env.MD5_ZIP }}
           
     - name: Run LDCheck
